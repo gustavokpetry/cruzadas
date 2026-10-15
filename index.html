@@ -428,6 +428,22 @@ html.retrato #girar{display:flex;position:fixed;inset:0;z-index:1000;flex-direct
   color:#f6ead0;font-size:18px;background:#1a1108 radial-gradient(ellipse at center,#3e2a15 0%,#0f0904 100%)}
 #girar svg{width:84px;height:84px;color:#d4a017;animation:girarCel 2.4s ease-in-out infinite}
 @keyframes girarCel{0%,25%{transform:rotate(0)}55%,100%{transform:rotate(-90deg)}}
+/* Crônica removida */
+#cronica{display:none}
+/* ---------- MODO LEVE (celulares e tablets) ----------
+   Animações infinitas dentro do mapa obrigam o aparelho a redesenhar o mapa
+   inteiro a cada quadro; aqui elas viram destaques fixos. */
+html.leve .estrela-alvo{animation:none}
+html.leve .dest.alvo{animation:none;stroke:#ff3d00;stroke-width:4.5}
+html.leve .dest.amigo{animation:none;stroke:#38d65a;stroke-width:4.5}
+html.leve .dest.recrutavel{animation:none}
+html.leve .seta{animation:none;filter:none}
+html.leve .hex{transition:none}
+html.leve .hex:hover{filter:none}
+html.leve .brasao,html.leve .retrato{filter:none}
+/* camadas fixas do mapa trocadas por uma imagem pronta (os textos continuam vivos) */
+html.leve .rasterizada{visibility:hidden}
+html.leve .rasterizada text{visibility:visible}
 </style>
 </head>
 <body>
@@ -3222,6 +3238,7 @@ document.addEventListener('pointerdown', ev => { if (ev.pointerType !== 'mouse')
     const toque = matchMedia('(pointer: coarse)').matches;
     raiz.classList.toggle('retrato', toque && vh > vw);
     const compacto = vh < 620 || (toque && vw < 1200);
+    raiz.classList.toggle('leve', toque || compacto);
     const LW = compacto ? Math.max(LARGURA_COMPACTA, Math.round(ALTURA_MIN_COMPACTA * vw / vh)) : LARGURA_ORIGINAL;
     if (!compacto && vw >= LW) {
       raiz.classList.remove('escalado', 'compacto');
@@ -3237,7 +3254,99 @@ document.addEventListener('pointerdown', ev => { if (ev.pointerType !== 'mouse')
     raiz.style.setProperty('--lh', LH + 'px');
     window.ESCALA = { s, x: sl, y: st, w: LW, h: LH };
   }
+  // ---------- camadas fixas do mapa viram imagem (modo leve) ----------
+  // Mar, terras de fora do jogo, sombra da costa, textura de papel e rotas
+  // marítimas nunca mudam, mas usam máscaras e padrões caros de desenhar.
+  // Elas são desenhadas uma vez num canvas e trocadas por uma imagem.
+  let assinaturaRaster = '';
+  async function rasterizarMapa() {
+    if (!raiz.classList.contains('leve')) return;
+    const svg = document.getElementById('mapa');
+    const cw = svg.clientWidth, ch = svg.clientHeight;
+    if (!cw || !ch) return;
+    const dpr = Math.min(3, window.devicePixelRatio || 1);
+    const k = Math.min(cw / 1000, ch / 640);                       // escala do viewBox (meet)
+    const vis = { x: -(cw / k - 1000) / 2 - 4, y: -(ch / k - 640) / 2 - 4, w: cw / k + 8, h: ch / k + 8 };
+    let px = Math.round(vis.w * k * (window.ESCALA.s || 1) * dpr);
+    px = Math.max(900, Math.min(2600, px));
+    const pyx = Math.round(px * vis.h / vis.w);
+    const assinatura = [Math.round(vis.w), Math.round(vis.h), px].join('x');
+    if (assinatura === assinaturaRaster) return;
+    assinaturaRaster = assinatura;
+    const estilos = Array.from(document.querySelectorAll('style')).map(x => x.textContent).join('\n');
+    const camadas = [
+      [document.getElementById('g-mar'), document.getElementById('g-terra-extra')],
+      Array.from(document.querySelectorAll('#g-fronteiras > .aguada')),
+      [document.getElementById('g-textura'), document.getElementById('g-rotas')]
+    ];
+    for (const nos of camadas) {
+      if (!nos.length || nos.some(n => !n)) continue;
+      try {
+        const url = await desenhar(svg, nos, vis, px, pyx, estilos);
+        let img = nos[0]._raster;
+        if (!img) {
+          img = document.createElementNS(NS, 'image');
+          img.setAttribute('preserveAspectRatio', 'none');
+          img.setAttribute('pointer-events', 'none');
+          nos[0].parentNode.insertBefore(img, nos[0]);
+          nos[0]._raster = img;
+        } else if (img._url) URL.revokeObjectURL(img._url);
+        img._url = url;
+        img.setAttribute('href', url);
+        img.setAttribute('x', vis.x); img.setAttribute('y', vis.y);
+        img.setAttribute('width', vis.w); img.setAttribute('height', vis.h);
+        nos.forEach(n => n.classList.add('rasterizada'));
+      } catch (e) { /* se falhar, a camada continua sendo desenhada normalmente */ }
+    }
+  }
+  function desenhar(svg, nos, vis, px, pyx, estilos) {
+    const doc = document.createElementNS(NS, 'svg');
+    doc.setAttribute('xmlns', NS);
+    doc.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+    doc.setAttribute('viewBox', `${vis.x} ${vis.y} ${vis.w} ${vis.h}`);
+    doc.setAttribute('width', px); doc.setAttribute('height', pyx);
+    doc.setAttribute('preserveAspectRatio', 'none');
+    const st = document.createElementNS(NS, 'style'); st.textContent = estilos; doc.appendChild(st);
+    svg.querySelectorAll(':scope > defs').forEach(d => doc.appendChild(d.cloneNode(true)));
+    nos.forEach(n => {
+      const c = n.cloneNode(true);
+      c.classList.remove('rasterizada');
+      c.querySelectorAll('text').forEach(t => t.remove());   // textos ficam vivos na página
+      if (c.querySelector('image[href^="blob:"]')) c.querySelectorAll('image[href^="blob:"]').forEach(i => i.remove());
+      doc.appendChild(c);
+    });
+    // símbolos do sprite usados pelas camadas (navios, rosa dos ventos etc.)
+    const extra = document.createElementNS(NS, 'defs');
+    const vistos = new Set();
+    const coletar = raizBusca => raizBusca.querySelectorAll('use').forEach(u => {
+      const h = (u.getAttribute('href') || u.getAttribute('xlink:href') || '').slice(1);
+      if (!h || vistos.has(h) || doc.querySelector('#' + CSS.escape(h))) return;
+      vistos.add(h);
+      const alvo = document.getElementById(h);
+      if (alvo) { const c = alvo.cloneNode(true); extra.appendChild(c); coletar(c); }
+    });
+    coletar(doc);
+    doc.insertBefore(extra, doc.firstChild);
+    const texto = new XMLSerializer().serializeToString(doc);
+    return new Promise((ok, falha) => {
+      const im = new Image();
+      im.onload = () => {
+        try {
+          const cv = document.createElement('canvas'); cv.width = px; cv.height = pyx;
+          cv.getContext('2d').drawImage(im, 0, 0, px, pyx);
+          cv.toBlob(b => b ? ok(URL.createObjectURL(b)) : falha(new Error('toBlob')), 'image/png');
+        } catch (e) { falha(e); }
+      };
+      im.onerror = () => falha(new Error('svg'));
+      im.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(texto);
+    });
+  }
+  let esperaRaster = null;
+  const agendarRaster = () => { clearTimeout(esperaRaster); esperaRaster = setTimeout(rasterizarMapa, 400); };
+
   ajustar();
+  agendarRaster();
+  addEventListener('resize', agendarRaster);
   addEventListener('resize', ajustar);
   addEventListener('orientationchange', () => setTimeout(ajustar, 250));
   if (window.visualViewport) visualViewport.addEventListener('resize', ajustar);

@@ -1,7 +1,7 @@
 /* Service worker do Cruzadas: guarda o jogo no aparelho para funcionar sem internet.
    Página principal: rede primeiro (sempre a versão mais nova quando há internet).
    Fontes do Google: guardadas na primeira vez que carregam. */
-const CACHE = 'cruzadas-v1';
+const CACHE = 'cruzadas-v2';
 const ASSETS = [
   './', './index.html', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png',
